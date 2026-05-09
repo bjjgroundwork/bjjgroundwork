@@ -4,7 +4,6 @@ import { useState, useEffect, useRef } from "react";
 // DESIGN TOKENS — Lightened "slate dojo" palette for improved readability
 // ─────────────────────────────────────────────────────────────────────────────
 const A       = "#2563eb";
-const A2      = "#1d4ed8";
 const AG      = "#2563eb14";
 const AB      = "#2563eb44";
 const SUCCESS = "#059669";
@@ -371,7 +370,6 @@ function Sidebar({ active, setActive, role, setRole, gymLogo }) {
 function Dashboard({ students }) {
   const eligible=students.filter(s=>s.attendance>=s.nextEligible);
   const overdue=students.filter(s=>s.billing==="Overdue");
-  const todayClasses=INIT_CALENDAR_EVENTS.filter(e=>["Mon","Tue","Wed"].includes(e.day));
   return (
     <div style={{padding:"28px 32px"}}>
       <PageHeader title="Dashboard" sub="BJJGroundwork" badge="Sun Apr 19, 2026"/>
@@ -1234,7 +1232,7 @@ function Documents({ role }) {
 // INSTRUCTORS — owner can add/remove
 // ─────────────────────────────────────────────────────────────────────────────
 function Instructors({ instructors, setInstructors, role }) {
-  const [expanded,setExpanded]=useState(null);
+  useState(null);
   const [showAdd,setShowAdd]=useState(false);
   const [form,setForm]=useState({name:"",belt:"purple",email:"",cert:"Level 1"});
   const isOwner=role==="owner";
