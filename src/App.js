@@ -1,9 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 
+import { supabase } from "./supabaseClient";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DESIGN TOKENS — Lightened "slate dojo" palette for improved readability
 // ─────────────────────────────────────────────────────────────────────────────
 const A       = "#2563eb";
+const A2      = "#1d4ed8";
 const AG      = "#2563eb14";
 const AB      = "#2563eb44";
 const SUCCESS = "#059669";
@@ -370,6 +373,7 @@ function Sidebar({ active, setActive, role, setRole, gymLogo }) {
 function Dashboard({ students }) {
   const eligible=students.filter(s=>s.attendance>=s.nextEligible);
   const overdue=students.filter(s=>s.billing==="Overdue");
+  const todayClasses=INIT_CALENDAR_EVENTS.filter(e=>["Mon","Tue","Wed"].includes(e.day));
   return (
     <div style={{padding:"28px 32px"}}>
       <PageHeader title="Dashboard" sub="BJJGroundwork" badge="Sun Apr 19, 2026"/>
@@ -440,12 +444,27 @@ function Students({ students, setStudents, role }) {
   const filtered=students.filter(s=>
     (beltF==="all"||s.belt===beltF)&&s.name.toLowerCase().includes(search.toLowerCase()));
 
-  const addStudent=()=>{
+  const addStudent=async()=>{
     if(!newName.trim())return;
-    const s={id:Date.now(),name:newName,belt:newBelt,stripes:0,
-      attendance:0,nextEligible:50,joined:"2026-04",age:parseInt(newAge)||18,
-      parentId:null,billing:"Active",fee:parseInt(newFee)||120,discount:0};
-    setStudents(p=>[...p,s]);
+    const newStudent={
+      name:newName, belt:newBelt, stripes:0,
+      attendance:0, age:parseInt(newAge)||18,
+      billing_status:"Active", fee:parseInt(newFee)||120,
+      discount:0, role:"student",
+      gym_id:"a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    };
+    const { data, error } = await supabase
+      .from('users')
+      .insert(newStudent)
+      .select()
+      .single();
+    if(data){
+      setStudents(p=>[...p,{...data,
+        nextEligible:data.belt==='white'?50:data.belt==='blue'?92:200,
+        parentId:data.parent_id,
+        billing:data.billing_status
+      }]);
+    }
     setNewName("");setNewAge("");setNewFee("120");setShowAdd(false);
   };
 
@@ -1232,7 +1251,7 @@ function Documents({ role }) {
 // INSTRUCTORS — owner can add/remove
 // ─────────────────────────────────────────────────────────────────────────────
 function Instructors({ instructors, setInstructors, role }) {
-  useState(null);
+  const [expanded,setExpanded]=useState(null);
   const [showAdd,setShowAdd]=useState(false);
   const [form,setForm]=useState({name:"",belt:"purple",email:"",cert:"Level 1"});
   const isOwner=role==="owner";
@@ -2147,16 +2166,61 @@ function ParentPortal({ students, curriculum }) {
 // ROOT APP
 // ─────────────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [role,setRole]             = useState("owner");
+  
+
+  const [role,setRole] = useState("owner");
   const [active,setActive]         = useState("dashboard");
-  const [students,setStudents]     = useState(INIT_STUDENTS);
-  const [instructors,setInstructors]= useState(INIT_INSTRUCTORS);
+  const [students,setStudents]     = useState([]);
+  const [instructors,setInstructors]= useState([]);
   const [curriculum,setCurriculum] = useState(INIT_CURRICULUM);
   const [promoReqs,setPromoReqs]   = useState(INIT_PROMO_REQS);
   const [prices,setPrices]         = useState(INIT_PRICES);
   const [gymLogo,setGymLogo]       = useState(null);
+  const [loading,setLoading]       = useState(true);
+  const GYM_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
 
   useEffect(()=>{ setActive(ROLES[role].nav[0]); },[role]);
+
+  useEffect(()=>{
+    async function loadData(){
+      const { data: studentData } = await supabase
+        .from('users')
+        .select('*')
+        .eq('role','student')
+        .eq('gym_id', GYM_ID);
+
+      const { data: instructorData } = await supabase
+        .from('users')
+        .select('*')
+        .eq('role','instructor')
+        .eq('gym_id', GYM_ID);
+
+      if(studentData) setStudents(studentData.map(s=>({
+        ...s,
+        nextEligible: s.belt==='white'?50:s.belt==='blue'?92:s.belt==='purple'?200:400,
+        parentId: s.parent_id,
+        billing: s.billing_status,
+      })));
+
+      if(instructorData) setInstructors(instructorData.map(i=>({
+        ...i,
+        progress: i.progress||0,
+        classes: i.classes||0,
+        cert: i.cert||'Level 1',
+      })));
+
+      setLoading(false);
+    }
+    loadData();
+  },[]);
+
+  if(loading) return (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",
+      height:"100vh",fontFamily:"'DM Mono',monospace",fontSize:14,color:"#4a6080"}}>
+      Loading BJJGroundwork...
+    </div>
+  );
+
 
   const sharedProps={ students,setStudents,instructors,setInstructors,
     curriculum,setCurriculum,promoReqs,setPromoReqs,prices,setPrices,role };
@@ -2178,26 +2242,29 @@ export default function App() {
     "parent-portal": <ParentPortal    students={students} curriculum={curriculum}/>,
   };
 
+  
+
   return (
     <>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;700;800;900&family=DM+Mono:wght@300;400;500&display=swap');
-        *{box-sizing:border-box;margin:0;padding:0}
-        body{background:${BG};color:${TEXT1}}
-        ::-webkit-scrollbar{width:5px}
-        ::-webkit-scrollbar-track{background:${BG}}
-        ::-webkit-scrollbar-thumb{background:${BORDER};border-radius:3px}
-        button:hover{opacity:.84}
-        input[type=number]::-webkit-inner-spin-button{opacity:.5}
-        select{appearance:auto}
-      `}</style>
-
-      <div style={{display:"flex",minHeight:"100vh",background:BG}}>
-        <Sidebar active={active} setActive={setActive} role={role} setRole={setRole} gymLogo={gymLogo}/>
-        <main style={{flex:1,overflowY:"auto",maxHeight:"100vh",background:BG}}>
-          {VIEW[active]??<div style={{padding:40,fontFamily:mono,color:TEXT3}}>View not found.</div>}
-        </main>
-      </div>
+      
+        <style>{`
+          @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;700;800;900&family=DM+Mono:wght@300;400;500&display=swap');
+          *{box-sizing:border-box;margin:0;padding:0}
+          body{background:${BG};color:${TEXT1}}
+          ::-webkit-scrollbar{width:5px}
+          ::-webkit-scrollbar-track{background:${BG}}
+          ::-webkit-scrollbar-thumb{background:${BORDER};border-radius:3px}
+          button:hover{opacity:.84}
+          input[type=number]::-webkit-inner-spin-button{opacity:.5}
+          select{appearance:auto}
+        `}</style>
+        <div style={{display:"flex",minHeight:"100vh",background:BG}}>
+          <Sidebar active={active} setActive={setActive} role={role} setRole={setRole} gymLogo={gymLogo}/>
+          <main style={{flex:1,overflowY:"auto",maxHeight:"100vh",background:BG}}>
+            {VIEW[active]??<div style={{padding:40,fontFamily:mono,color:TEXT3}}>View not found.</div>}
+          </main>
+        </div>
+      
     </>
   );
 }
