@@ -836,15 +836,24 @@ function Attendance({ students, role }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // CALENDAR — shared instructor calendar + private lesson scheduling
 // ─────────────────────────────────────────────────────────────────────────────
-function Calendar({ role }) {
-  const [events,setEvents]=useState(INIT_CALENDAR_EVENTS);
+function Calendar({ role, calendarEvents, setCalendarEvents, gymId }) {
+  const [events,setEvents]=[calendarEvents,setCalendarEvents];
   const [showForm,setShowForm]=useState(false);
   const [form,setForm]=useState({title:"",day:"Mon",time:"",type:"class",instructor:"",capacity:"10"});
   const canEdit=role==="owner"||role==="instructor";
 
-  const addEvent=()=>{
+  const addEvent=async()=>{
     if(!form.title||!form.time)return;
-    setEvents(p=>[...p,{...form,id:"e"+Date.now(),capacity:parseInt(form.capacity)||10}]);
+    const { data, error } = await supabase
+      .from('classes')
+      .insert({
+        title:form.title, day:form.day, time:form.time,
+        type:form.type, instructor_name:form.instructor,
+        capacity:parseInt(form.capacity)||10,
+        gym_id:'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
+      })
+      .select().single();
+    if(data) setEvents(p=>[...p,{...data,instructor:data.instructor_name}]);
     setForm({title:"",day:"Mon",time:"",type:"class",instructor:"",capacity:"10"});
     setShowForm(false);
   };
@@ -1041,8 +1050,7 @@ function Curriculum({ curriculum, setCurriculum, role }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // VIDEOS — upload area (owner), view area (all)
 // ─────────────────────────────────────────────────────────────────────────────
-function Videos({ role }) {
-  const [videos,setVideos]=useState(INIT_VIDEOS);
+function Videos({ role, videos, setVideos, gymId }) {
   const [beltF,setBeltF]=useState("all");
   const [showAdd,setShowAdd]=useState(false);
   const [form,setForm]=useState({title:"",belt:"white",duration:"00:00"});
@@ -1135,8 +1143,8 @@ function Videos({ role }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // DOCUMENTS — readable by all, editable only by owner
 // ─────────────────────────────────────────────────────────────────────────────
-function Documents({ role }) {
-  const [docs,setDocs]=useState(INIT_DOCUMENTS);
+function Documents({ role, documents, setDocuments, gymId }) {
+  const [docs,setDocs]=[documents,setDocuments];
   const [viewing,setViewing]=useState(null);
   const [editing,setEditing]=useState(null);
   const [showAdd,setShowAdd]=useState(false);
@@ -1147,9 +1155,18 @@ function Documents({ role }) {
     setDocs(p=>p.map(d=>d.id===editing.id?{...editing}:d));
     setEditing(null);
   };
-  const addDoc=()=>{
+  const addDoc=async()=>{
     if(!form.title.trim())return;
-    setDocs(p=>[...p,{...form,id:"d"+Date.now(),date:"Apr 19, 2026"}]);
+    const { data } = await supabase
+      .from('documents')
+      .insert({
+        title:form.title, category:form.category, content:form.content,
+        gym_id:'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
+      })
+      .select().single();
+    if(data) setDocs(p=>[...p,{...data,
+      date:new Date(data.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
+    }]);
     setForm({title:"",category:"Policy",content:""});
     setShowAdd(false);
   };
@@ -1256,9 +1273,16 @@ function Instructors({ instructors, setInstructors, role }) {
   const [form,setForm]=useState({name:"",belt:"purple",email:"",cert:"Level 1"});
   const isOwner=role==="owner";
 
-  const addInstructor=()=>{
+  const addInstructor=async()=>{
     if(!form.name.trim())return;
-    setInstructors(p=>[...p,{...form,id:Date.now(),progress:0,classes:0}]);
+    const { data, error } = await supabase
+      .from('users')
+      .insert({
+        name:form.name, belt:form.belt, email:form.email,
+        role:'instructor', gym_id:'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
+      })
+      .select().single();
+    if(data) setInstructors(p=>[...p,{...data,progress:0,classes:0,cert:form.cert}]);
     setForm({name:"",belt:"purple",email:"",cert:"Level 1"});
     setShowAdd(false);
   };
@@ -2173,6 +2197,9 @@ export default function App() {
   const [students,setStudents]     = useState([]);
   const [instructors,setInstructors]= useState([]);
   const [curriculum,setCurriculum] = useState(INIT_CURRICULUM);
+  const [calendarEvents,setCalendarEvents] = useState(INIT_CALENDAR_EVENTS);
+  const [documents,setDocuments] = useState(INIT_DOCUMENTS);
+  const [videos,setVideos] = useState(INIT_VIDEOS);
   const [promoReqs,setPromoReqs]   = useState(INIT_PROMO_REQS);
   const [prices,setPrices]         = useState(INIT_PRICES);
   const [gymLogo,setGymLogo]       = useState(null);
@@ -2183,17 +2210,38 @@ export default function App() {
 
   useEffect(()=>{
     async function loadData(){
+      // Load students
       const { data: studentData } = await supabase
-        .from('users')
-        .select('*')
-        .eq('role','student')
-        .eq('gym_id', GYM_ID);
+        .from('users').select('*')
+        .eq('role','student').eq('gym_id',GYM_ID);
 
+      // Load instructors
       const { data: instructorData } = await supabase
-        .from('users')
-        .select('*')
-        .eq('role','instructor')
-        .eq('gym_id', GYM_ID);
+        .from('users').select('*')
+        .eq('role','instructor').eq('gym_id',GYM_ID);
+
+      // Load classes
+      const { data: classData } = await supabase
+        .from('classes').select('*')
+        .eq('gym_id',GYM_ID);
+
+      // Load techniques
+      const { data: techData } = await supabase
+        .from('techniques').select('*')
+        .eq('gym_id',GYM_ID)
+        .order('sort_order');
+
+      // Load documents
+      const { data: docData } = await supabase
+        .from('documents').select('*')
+        .eq('gym_id',GYM_ID)
+        .order('created_at');
+
+      // Load videos
+      const { data: videoData } = await supabase
+        .from('videos').select('*')
+        .eq('gym_id',GYM_ID)
+        .order('created_at');
 
       if(studentData) setStudents(studentData.map(s=>({
         ...s,
@@ -2207,6 +2255,27 @@ export default function App() {
         progress: i.progress||0,
         classes: i.classes||0,
         cert: i.cert||'Level 1',
+      })));
+
+      if(classData) setCalendarEvents(classData.map(c=>({
+        ...c,
+        instructor: c.instructor_name||'',
+      })));
+
+      if(techData){
+        const grouped={white:[],blue:[],purple:[],brown:[]};
+        techData.forEach(t=>{ if(grouped[t.belt]) grouped[t.belt].push(t.title); });
+        setCurriculum(grouped);
+      }
+
+      if(docData) setDocuments(docData.map(d=>({
+        ...d,
+        date: new Date(d.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
+      })));
+
+      if(videoData) setVideos(videoData.map(v=>({
+        ...v,
+        date: new Date(v.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
       })));
 
       setLoading(false);
@@ -2228,11 +2297,11 @@ export default function App() {
   const VIEW = {
     dashboard:       <Dashboard       {...sharedProps}/>,
     students:        <Students        {...sharedProps}/>,
-    attendance:      <Attendance      {...sharedProps}/>,
-    calendar:        <Calendar        role={role}/>,
+    attendance:      <Attendance      {...sharedProps} calendarEvents={calendarEvents}/>,
+    calendar:        <Calendar        role={role} calendarEvents={calendarEvents} setCalendarEvents={setCalendarEvents} gymId={GYM_ID}/>,
     curriculum:      <Curriculum      {...sharedProps}/>,
-    videos:          <Videos          role={role}/>,
-    documents:       <Documents       role={role}/>,
+    videos:          <Videos          role={role} videos={videos} setVideos={setVideos} gymId={GYM_ID}/>,
+    documents:       <Documents       role={role} documents={documents} setDocuments={setDocuments} gymId={GYM_ID}/>,
     instructors:     <Instructors     {...sharedProps}/>,
     messaging:       <Messaging       students={students}/>,
     reports:         <Reports         students={students}/>,
