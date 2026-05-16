@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useUser, SignIn, SignedIn, SignedOut, useClerk } from "@clerk/clerk-react";
 import { supabase } from "./supabaseClient";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -257,7 +258,8 @@ function selStyle(){ return {background:SURFACE,border:`1px solid ${BORDER}`,bor
 // SIDEBAR
 // ─────────────────────────────────────────────────────────────────────────────
 function Sidebar({ active, setActive, role, setRole, gymLogo }) {
-  const nav=ROLES[role].nav;
+const nav=ROLES[role].nav;
+  const { signOut } = useClerk();
   return (
     <div style={{width:220,background:SIDEBAR,borderRight:`1px solid ${SIDEBAR2}`,
       display:"flex",flexDirection:"column",minHeight:"100vh",flexShrink:0,position:"sticky",top:0,zIndex:10}}>
@@ -292,7 +294,13 @@ function Sidebar({ active, setActive, role, setRole, gymLogo }) {
       </nav>
       <div style={{padding:"12px 18px",borderTop:`1px solid ${SIDEBAR2}`}}>
         <div style={{fontFamily:mono,fontSize:8,color:"#2a4050",letterSpacing:1,marginBottom:2}}>GYM</div>
-        <div style={{color:"#4a7090",fontSize:12,fontFamily:cond,fontWeight:700}}>Ribeiro BJJ Academy</div>
+        <div style={{color:"#4a7090",fontSize:12,fontFamily:cond,fontWeight:700,marginBottom:10}}>Ribeiro BJJ Academy</div>
+        <button onClick={()=>signOut()} style={{
+          width:"100%",padding:"8px",borderRadius:6,border:"1px solid #253545",
+          background:"transparent",color:"#4a7090",cursor:"pointer",
+          fontFamily:mono,fontSize:9,letterSpacing:1,textTransform:"uppercase",
+          transition:"all .15s"
+        }}>Sign Out</button>
       </div>
     </div>
   );
@@ -1862,7 +1870,11 @@ function ParentPortal({ students, curriculum }) {
 // ROOT APP
 // ─────────────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [role,setRole]               = useState("owner");
+  const { user, isLoaded } = useUser();
+  const clerkRole = user?.publicMetadata?.role;
+  const [manualRole,setManualRole]   = useState("owner");
+  const role = clerkRole || manualRole;
+  const setRole = setManualRole;
   const [active,setActive]           = useState("dashboard");
   const [students,setStudents]       = useState([]);
   const [instructors,setInstructors] = useState([]);
@@ -1925,10 +1937,17 @@ export default function App() {
     loadData();
   },[]);
 
+  if(!isLoaded) return (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",
+      height:"100vh",fontFamily:"'DM Mono',monospace",fontSize:14,color:"#4a6080",background:"#f0f4f8"}}>
+      Loading BJJGroundwork…
+    </div>
+  );
+
   if(loading) return (
     <div style={{display:"flex",alignItems:"center",justifyContent:"center",
-      height:"100vh",fontFamily:mono,fontSize:14,color:TEXT3,background:BG}}>
-      Loading BJJGroundwork…
+      height:"100vh",fontFamily:"'DM Mono',monospace",fontSize:14,color:"#4a6080",background:"#f0f4f8"}}>
+      Loading data…
     </div>
   );
 
@@ -1952,25 +1971,42 @@ export default function App() {
     "parent-portal": <ParentPortal   students={students} curriculum={curriculum}/>,
   };
 
-  return (
+  const AppShell = () => (
     <>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;700;800;900&family=DM+Mono:wght@300;400;500&display=swap');
         *{box-sizing:border-box;margin:0;padding:0}
-        body{background:${BG};color:${TEXT1}}
+        body{background:#f0f4f8;color:#0f2540}
         ::-webkit-scrollbar{width:5px}
-        ::-webkit-scrollbar-track{background:${BG}}
-        ::-webkit-scrollbar-thumb{background:${BORDER};border-radius:3px}
+        ::-webkit-scrollbar-track{background:#f0f4f8}
+        ::-webkit-scrollbar-thumb{background:#d1dce8;border-radius:3px}
         button:hover{opacity:.84}
         input[type=number]::-webkit-inner-spin-button{opacity:.5}
         select{appearance:auto}
       `}</style>
-      <div style={{display:"flex",minHeight:"100vh",background:BG}}>
+      <div style={{display:"flex",minHeight:"100vh",background:"#f0f4f8"}}>
         <Sidebar active={active} setActive={setActive} role={role} setRole={setRole} gymLogo={gymLogo}/>
-        <main style={{flex:1,overflowY:"auto",maxHeight:"100vh",background:BG}}>
-          {VIEW[active]??<div style={{padding:40,fontFamily:mono,color:TEXT3}}>View not found.</div>}
+        <main style={{flex:1,overflowY:"auto",maxHeight:"100vh",background:"#f0f4f8"}}>
+          {VIEW[active]??<div style={{padding:40,fontFamily:"'DM Mono',monospace",color:"#8aaac8"}}>View not found.</div>}
         </main>
       </div>
+    </>
+  );
+
+  return (
+    <>
+      <SignedOut>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"center",
+          height:"100vh",background:"#f0f4f8",flexDirection:"column",gap:24}}>
+          <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:40,color:"#0f2540"}}>
+            <span style={{color:"#2563eb"}}>BJJ</span>Groundwork
+          </div>
+          <SignIn routing="hash"/>
+        </div>
+      </SignedOut>
+      <SignedIn>
+        <AppShell/>
+      </SignedIn>
     </>
   );
 }
