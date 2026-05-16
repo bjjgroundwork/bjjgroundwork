@@ -257,8 +257,8 @@ function selStyle(){ return {background:SURFACE,border:`1px solid ${BORDER}`,bor
 // ─────────────────────────────────────────────────────────────────────────────
 // SIDEBAR
 // ─────────────────────────────────────────────────────────────────────────────
-function Sidebar({ active, setActive, role, setRole, gymLogo }) {
-const nav=ROLES[role].nav;
+function Sidebar({ active, setActive, role, setRole, gymLogo, clerkRole }) {
+  const nav=ROLES[role].nav;
   const { signOut } = useClerk();
   return (
     <div style={{width:220,background:SIDEBAR,borderRight:`1px solid ${SIDEBAR2}`,
@@ -274,10 +274,16 @@ const nav=ROLES[role].nav;
       </div>
       <div style={{padding:"10px 10px 0"}}>
         <div style={{fontFamily:mono,fontSize:8,color:"#3a5570",letterSpacing:2,textTransform:"uppercase",marginBottom:4,paddingLeft:6}}>Viewing as</div>
-        <select value={role} onChange={e=>setRole(e.target.value)} style={{width:"100%",background:SIDEBAR2,color:"#7a9abf",
-          border:"1px solid #253545",borderRadius:6,fontFamily:mono,fontSize:9,padding:"7px 9px",outline:"none",cursor:"pointer"}}>
-          {Object.entries(ROLES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
-        </select>
+        {clerkRole
+          ? <div style={{fontFamily:mono,fontSize:10,color:"#7a9abf",padding:"7px 9px",
+              background:SIDEBAR2,borderRadius:6,border:"1px solid #253545"}}>
+              {ROLES[clerkRole]?.label||clerkRole}
+            </div>
+          : <select value={role} onChange={e=>setRole(e.target.value)} style={{width:"100%",background:SIDEBAR2,color:"#7a9abf",
+              border:"1px solid #253545",borderRadius:6,fontFamily:mono,fontSize:9,padding:"7px 9px",outline:"none",cursor:"pointer"}}>
+              {Object.entries(ROLES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+            </select>
+        }
       </div>
       <nav style={{padding:"10px 8px",flex:1,overflowY:"auto"}}>
         {nav.map(id=>{
@@ -531,13 +537,13 @@ function Students({ students, setStudents, role }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // GEO-LOCKED STUDENT KIOSK
 // ─────────────────────────────────────────────────────────────────────────────
-function StudentKiosk({ students, calendarEvents }) {
+function StudentKiosk({ students, calendarEvents, currentUserProfile }) {
   const [geoState,setGeoState]=useState("idle");
   const [geoMsg,setGeoMsg]=useState("");
   const [distM,setDistM]=useState(null);
   const [sel,setSel]=useState(null);
   const [checkedIn,setCheckedIn]=useState(false);
-  const me=students[0];
+  const me=currentUserProfile||students[0];
   const classes=calendarEvents.filter(e=>e.type==="class"||!e.type);
 
   const requestGeo=()=>{
@@ -675,7 +681,7 @@ function StudentKiosk({ students, calendarEvents }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // ATTENDANCE (staff view)
 // ─────────────────────────────────────────────────────────────────────────────
-function Attendance({ students, role, calendarEvents }) {
+function Attendance({ students, role, calendarEvents, currentUserProfile }) {
   const classes=calendarEvents.filter(e=>e.type==="class"||!e.type);
   const [sel,setSel]=useState(classes[0]||null);
   const [checked,setChecked]=useState({});
@@ -683,7 +689,7 @@ function Attendance({ students, role, calendarEvents }) {
   const toggle=id=>setChecked(p=>({...p,[id]:!p[id]}));
   const count=Object.values(checked).filter(Boolean).length;
 
-  if(role==="student") return <StudentKiosk students={students} calendarEvents={calendarEvents}/>;
+  if(role==="student") return <StudentKiosk students={students} calendarEvents={calendarEvents} currentUserProfile={currentUserProfile}/>;
 
   const save=async()=>{
     const ids=Object.entries(checked).filter(([,v])=>v).map(([k])=>k);
@@ -1886,8 +1892,42 @@ export default function App() {
   const [documents,setDocuments]     = useState([]);
   const [videos,setVideos]           = useState([]);
   const [loading,setLoading]         = useState(true);
+  const [currentUserProfile,setCurrentUserProfile] = useState(null);
 
   useEffect(()=>{ setActive(ROLES[role].nav[0]); },[role]);
+
+  useEffect(()=>{
+    async function syncUser(){
+      if(!user)return;
+      const clerkId=user.id;
+      const email=user.primaryEmailAddress?.emailAddress||"";
+      const firstName=user.firstName||"";
+      const lastName=user.lastName||"";
+      const fullName=`${firstName} ${lastName}`.trim();
+      const name=fullName||user.username||email;
+      const { data:existing } = await supabase
+        .from("users").select("*").eq("clerk_id",clerkId).single();
+      if(existing){
+        // Update name if it changed in Clerk
+        if(name && name !== existing.email && existing.name === existing.email){
+          await supabase.from("users").update({name}).eq("clerk_id",clerkId);
+        }
+        setCurrentUserProfile({...existing,
+          name: (name && name !== email) ? name : existing.name,
+          nextEligible:existing.belt==="white"?50:existing.belt==="blue"?92:existing.belt==="purple"?200:400,
+          billing:existing.billing_status
+        });
+      } else {
+        const { data:created } = await supabase.from("users").insert({
+          clerk_id:clerkId,gym_id:GYM_ID,name,email,
+          role:clerkRole||"student",belt:"white",stripes:0,
+          attendance:0,fee:120,discount:0,billing_status:"Active"
+        }).select().single();
+        if(created) setCurrentUserProfile({...created,nextEligible:50,billing:"Active"});
+      }
+    }
+    if(isLoaded&&user) syncUser();
+  },[user,isLoaded]);
 
   useEffect(()=>{
     async function loadData() {
@@ -1952,12 +1992,13 @@ export default function App() {
   );
 
   const sharedProps={students,setStudents,instructors,setInstructors,
-    curriculum,setCurriculum,promoReqs,setPromoReqs,prices,setPrices,role};
+    curriculum,setCurriculum,promoReqs,setPromoReqs,prices,setPrices,role,
+    currentUserProfile};
 
   const VIEW = {
     dashboard:       <Dashboard      {...sharedProps} calendarEvents={calendarEvents}/>,
     students:        <Students       {...sharedProps}/>,
-    attendance:      <Attendance     {...sharedProps} calendarEvents={calendarEvents}/>,
+    attendance:      <Attendance     {...sharedProps} calendarEvents={calendarEvents} currentUserProfile={currentUserProfile}/>,
     calendar:        <Calendar       role={role} calendarEvents={calendarEvents} setCalendarEvents={setCalendarEvents}/>,
     curriculum:      <Curriculum     {...sharedProps}/>,
     videos:          <Videos         role={role} videos={videos} setVideos={setVideos}/>,
@@ -1965,9 +2006,9 @@ export default function App() {
     instructors:     <Instructors    {...sharedProps}/>,
     messaging:       <Messaging      students={students}/>,
     reports:         <Reports        students={students}/>,
-    billing:         <Billing        students={students} role={role}/>,
+    billing:         <Billing        students={currentUserProfile?[currentUserProfile,...students.filter(s=>s.id!==currentUserProfile.id)]:students} role={role}/>,
     settings:        <Settings       {...sharedProps} gymLogo={gymLogo} setGymLogo={setGymLogo}/>,
-    "my-progress":   <MyProgress     students={students} promoReqs={promoReqs} curriculum={curriculum}/>,
+    "my-progress":   <MyProgress     students={currentUserProfile?[currentUserProfile,...students.filter(s=>s.id!==currentUserProfile.id)]:students} promoReqs={promoReqs} curriculum={curriculum}/>,
     "parent-portal": <ParentPortal   students={students} curriculum={curriculum}/>,
   };
 
@@ -1985,7 +2026,7 @@ export default function App() {
         select{appearance:auto}
       `}</style>
       <div style={{display:"flex",minHeight:"100vh",background:"#f0f4f8"}}>
-        <Sidebar active={active} setActive={setActive} role={role} setRole={setRole} gymLogo={gymLogo}/>
+        <Sidebar active={active} setActive={setActive} role={role} setRole={setRole} gymLogo={gymLogo} clerkRole={clerkRole}/>
         <main style={{flex:1,overflowY:"auto",maxHeight:"100vh",background:"#f0f4f8"}}>
           {VIEW[active]??<div style={{padding:40,fontFamily:"'DM Mono',monospace",color:"#8aaac8"}}>View not found.</div>}
         </main>
@@ -2001,7 +2042,10 @@ export default function App() {
           <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:40,color:"#0f2540"}}>
             <span style={{color:"#2563eb"}}>BJJ</span>Groundwork
           </div>
-          <SignIn routing="hash"/>
+          <SignIn routing="hash" appearance={{elements:{
+            card:{boxShadow:"0 4px 24px rgba(0,0,0,.08)",borderRadius:12},
+            headerTitle:{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900},
+          }}}/>
         </div>
       </SignedOut>
       <SignedIn>
