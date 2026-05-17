@@ -99,7 +99,7 @@ const NAV_META = {
   "my-progress":"My Progress", "parent-portal":"My Children",
 };
 
-const GYM_LAT=37.7749, GYM_LNG=-122.4194, GYM_RADIUS_M=150;
+const GYM_LAT=37.7749, GYM_LNG=-122.4194, GYM_RADIUS_M=150; // fallback defaults
 function haversineMetres(la1,ln1,la2,ln2){
   const R=6371000,r=Math.PI/180,dLa=(la2-la1)*r,dLn=(ln2-ln1)*r;
   const a=Math.sin(dLa/2)**2+Math.cos(la1*r)*Math.cos(la2*r)*Math.sin(dLn/2)**2;
@@ -257,7 +257,7 @@ function selStyle(){ return {background:SURFACE,border:`1px solid ${BORDER}`,bor
 // ─────────────────────────────────────────────────────────────────────────────
 // SIDEBAR
 // ─────────────────────────────────────────────────────────────────────────────
-function Sidebar({ active, setActive, role, setRole, gymLogo, clerkRole }) {
+function Sidebar({ active, setActive, role, setRole, gymLogo, clerkRole, gymName }) {
   const nav=ROLES[role].nav;
   const { signOut } = useClerk();
   return (
@@ -300,7 +300,7 @@ function Sidebar({ active, setActive, role, setRole, gymLogo, clerkRole }) {
       </nav>
       <div style={{padding:"12px 18px",borderTop:`1px solid ${SIDEBAR2}`}}>
         <div style={{fontFamily:mono,fontSize:8,color:"#2a4050",letterSpacing:1,marginBottom:2}}>GYM</div>
-        <div style={{color:"#4a7090",fontSize:12,fontFamily:cond,fontWeight:700,marginBottom:10}}>Ribeiro BJJ Academy</div>
+        <div style={{color:"#4a7090",fontSize:12,fontFamily:cond,fontWeight:700,marginBottom:10}}>{gymName||"BJJGroundwork"}</div>
         <button onClick={()=>signOut()} style={{
           width:"100%",padding:"8px",borderRadius:6,border:"1px solid #253545",
           background:"transparent",color:"#4a7090",cursor:"pointer",
@@ -315,9 +315,35 @@ function Sidebar({ active, setActive, role, setRole, gymLogo, clerkRole }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // DASHBOARD
 // ─────────────────────────────────────────────────────────────────────────────
-function Dashboard({ students, calendarEvents }) {
+const BELT_ORDER=["white","blue","purple","brown","black"];
+function nextBelt(belt){const i=BELT_ORDER.indexOf(belt);return BELT_ORDER[Math.min(i+1,BELT_ORDER.length-1)];}
+
+function Dashboard({ students, setStudents, calendarEvents, role }) {
   const eligible=students.filter(s=>s.attendance>=(s.nextEligible||50));
   const overdue=students.filter(s=>s.billing==="Overdue"||s.billing_status==="Overdue");
+  const canEdit=role==="owner"||role==="instructor";
+  const [viewingClass,setViewingClass]=useState(null);
+  const [classHistory,setClassHistory]=useState([]);
+  const [promoting,setPromoting]=useState(null);
+
+  const viewClassCheckins=async(c)=>{
+    setViewingClass(c);
+    const {data}=await supabase.from("attendance")
+      .select("*, users(name,belt,stripes)")
+      .eq("class_id",c.id)
+      .order("checked_in_at",{ascending:false});
+    setClassHistory(data||[]);
+  };
+
+  const promoteStudent=async(s)=>{
+    setPromoting(s.id);
+    const nb=nextBelt(s.belt);
+    await supabase.from("users").update({belt:nb,stripes:0,attendance:0}).eq("id",s.id);
+    setStudents(p=>p.map(x=>x.id===s.id?{...x,belt:nb,stripes:0,attendance:0,
+      nextEligible:nb==="white"?50:nb==="blue"?92:nb==="purple"?200:400}:x));
+    setPromoting(null);
+  };
+
   return (
     <div style={{padding:"28px 32px"}}>
       <PageHeader title="Dashboard" sub="BJJGroundwork" badge="Sun Apr 19, 2026"/>
@@ -332,12 +358,15 @@ function Dashboard({ students, calendarEvents }) {
           {calendarEvents.slice(0,5).map(c=>(
             <div key={c.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",
               padding:"10px 0",borderBottom:`1px solid ${BORDER}`}}>
-              <div>
+              <div style={{flex:1}}>
                 <div style={{fontFamily:mono,fontSize:9,color:A,marginBottom:2}}>{c.day} · {c.time}</div>
                 <div style={{fontFamily:cond,fontWeight:700,fontSize:15,color:TEXT1}}>{c.title}</div>
                 <div style={{fontFamily:mono,fontSize:9,color:TEXT3}}>{c.instructor||c.instructor_name||"—"}</div>
               </div>
-              <Tag color={c.type==="private"?WARN:A}>{c.type||"class"}</Tag>
+              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <Tag color={c.type==="private"?WARN:A}>{c.type||"class"}</Tag>
+                {canEdit&&<Btn small variant="ghost" onClick={()=>viewClassCheckins(c)}>View</Btn>}
+              </div>
             </div>
           ))}
           {calendarEvents.length===0&&<div style={{fontFamily:mono,fontSize:10,color:TEXT3}}>No classes scheduled.</div>}
@@ -349,9 +378,17 @@ function Dashboard({ students, calendarEvents }) {
               <Avatar name={s.name}/>
               <div style={{flex:1}}>
                 <div style={{fontFamily:cond,fontWeight:700,fontSize:15,color:TEXT1,marginBottom:3}}>{s.name}</div>
-                <BeltBadge belt={s.belt} stripes={s.stripes}/>
+                <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                  <BeltBadge belt={s.belt} stripes={s.stripes}/>
+                  <span style={{fontFamily:mono,fontSize:8,color:TEXT3}}>→</span>
+                  <BeltBadge belt={nextBelt(s.belt)} stripes={0}/>
+                </div>
               </div>
-              <Btn small>Promote</Btn>
+              {canEdit&&(
+                <Btn small onClick={()=>promoteStudent(s)} disabled={promoting===s.id}>
+                  {promoting===s.id?"…":"Promote"}
+                </Btn>
+              )}
             </div>
           ))}
         </Panel>
@@ -367,6 +404,35 @@ function Dashboard({ students, calendarEvents }) {
           ))}
         </div>
       </Panel>
+
+      {/* Class check-in viewer modal */}
+      {viewingClass&&(
+        <Modal title={`${viewingClass.title} — Check-ins`} onClose={()=>setViewingClass(null)}>
+          <div style={{fontFamily:mono,fontSize:9,color:TEXT3,marginBottom:14}}>
+            {viewingClass.day} · {viewingClass.time} · {classHistory.length} check-ins recorded
+          </div>
+          {classHistory.length===0&&(
+            <div style={{fontFamily:mono,fontSize:10,color:TEXT3}}>No check-ins recorded for this class yet.</div>
+          )}
+          {classHistory.map((rec,i)=>{
+            const s=rec.users||{};
+            const dt=new Date(rec.checked_in_at);
+            return (
+              <div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"9px 0",borderBottom:`1px solid ${BORDER}`}}>
+                <Avatar name={s.name||"?"} size={34}/>
+                <div style={{flex:1}}>
+                  <div style={{fontFamily:cond,fontWeight:700,fontSize:15,color:TEXT1}}>{s.name||"Unknown"}</div>
+                  <div style={{fontFamily:mono,fontSize:8,color:TEXT3}}>
+                    {dt.toLocaleDateString("en-US",{month:"short",day:"numeric"})} · {dt.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}
+                  </div>
+                </div>
+                {s.belt&&<BeltBadge belt={s.belt} stripes={s.stripes||0}/>}
+                <Tag color={rec.verified_on_site?SUCCESS:TEXT3}>{rec.verified_on_site?"On-site":"Manual"}</Tag>
+              </div>
+            );
+          })}
+        </Modal>
+      )}
     </div>
   );
 }
@@ -493,7 +559,14 @@ function Students({ students, setStudents, role }) {
                   <Info label="Monthly" value={s.discount>0?`$${effectiveFee}`:`$${s.fee}`}/>
                   <Info label="Status"  value={billing}/>
                 </div>
-                {canEdit&&<Btn small variant="ghost" onClick={()=>setEditStudent({...s,billing:billing})}>Edit Student</Btn>}
+                <div style={{display:"flex",gap:8}}>
+                {canEdit&&<Btn small variant="ghost" onClick={()=>setEditStudent({...s,billing:billing})}>Edit</Btn>}
+                {role==="owner"&&<Btn small variant="danger" onClick={async()=>{
+                  if(!window.confirm(`Delete ${s.name}? This cannot be undone.`))return;
+                  await supabase.from("users").delete().eq("id",s.id);
+                  setStudents(p=>p.filter(x=>x.id!==s.id));
+                }}>Delete</Btn>}
+              </div>
               </div>
             </div>
           );
@@ -537,7 +610,7 @@ function Students({ students, setStudents, role }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // GEO-LOCKED STUDENT KIOSK
 // ─────────────────────────────────────────────────────────────────────────────
-function StudentKiosk({ students, calendarEvents, currentUserProfile }) {
+function StudentKiosk({ students, calendarEvents, currentUserProfile, gymAddress }) {
   const [geoState,setGeoState]=useState("idle");
   const [geoMsg,setGeoMsg]=useState("");
   const [distM,setDistM]=useState(null);
@@ -546,14 +619,18 @@ function StudentKiosk({ students, calendarEvents, currentUserProfile }) {
   const me=currentUserProfile||students[0];
   const classes=calendarEvents.filter(e=>e.type==="class"||!e.type);
 
+  const gymLat=gymAddress?.lat||GYM_LAT;
+  const gymLng=gymAddress?.lng||GYM_LNG;
+  const gymRadius=gymAddress?.radius||GYM_RADIUS_M;
+
   const requestGeo=()=>{
     if(!navigator.geolocation){setGeoState("error");setGeoMsg("Geolocation not supported.");return;}
     setGeoState("checking");
     navigator.geolocation.getCurrentPosition(
       pos=>{
-        const d=haversineMetres(pos.coords.latitude,pos.coords.longitude,GYM_LAT,GYM_LNG);
+        const d=haversineMetres(pos.coords.latitude,pos.coords.longitude,gymLat,gymLng);
         setDistM(Math.round(d));
-        if(d<=GYM_RADIUS_M)setGeoState("allowed");
+        if(d<=gymRadius)setGeoState("allowed");
         else{setGeoState("denied");setGeoMsg(`You are ${Math.round(d)} m from the gym. Check-in requires on-site presence.`);}
       },
       err=>{
@@ -567,6 +644,8 @@ function StudentKiosk({ students, calendarEvents, currentUserProfile }) {
   const doCheckIn=async()=>{
     if(!sel||!me)return;
     await supabase.from("attendance").insert({gym_id:GYM_ID,class_id:sel.id,student_id:me.id,verified_on_site:true});
+    // Increment attendance count
+    await supabase.from("users").update({attendance:(me.attendance||0)+1}).eq("id",me.id);
     setCheckedIn(true);
   };
 
@@ -613,7 +692,7 @@ function StudentKiosk({ students, calendarEvents, currentUserProfile }) {
               marginBottom:20,display:"inline-flex",gap:16,alignItems:"center"}}>
               <div><div style={{fontFamily:mono,fontSize:8,color:TEXT3}}>YOUR DISTANCE</div><div style={{fontFamily:cond,fontWeight:900,fontSize:24,color:DANGER}}>{distM} m</div></div>
               <div style={{width:1,height:36,background:BORDER}}/>
-              <div><div style={{fontFamily:mono,fontSize:8,color:TEXT3}}>ALLOWED</div><div style={{fontFamily:cond,fontWeight:900,fontSize:24,color:SUCCESS}}>{GYM_RADIUS_M} m</div></div>
+              <div><div style={{fontFamily:mono,fontSize:8,color:TEXT3}}>ALLOWED</div><div style={{fontFamily:cond,fontWeight:900,fontSize:24,color:SUCCESS}}>{gymRadius} m</div></div>
             </div>
           )}
           <div style={{display:"flex",gap:10,justifyContent:"center"}}>
@@ -646,7 +725,7 @@ function StudentKiosk({ students, calendarEvents, currentUserProfile }) {
         padding:"10px 16px",marginBottom:22,display:"flex",alignItems:"center",gap:12}}>
         <div style={{width:22,height:22,borderRadius:"50%",background:SUCCESS,display:"flex",
           alignItems:"center",justifyContent:"center",color:"#fff",fontSize:13,flexShrink:0}}>✓</div>
-        <div style={{fontFamily:mono,fontSize:10,color:SUCCESS}}>Location verified — within {GYM_RADIUS_M} m of the gym</div>
+        <div style={{fontFamily:mono,fontSize:10,color:SUCCESS}}>Location verified — within {gymRadius} m of the gym{gymAddress?.label?` (${gymAddress.label})`:""}</div>
       </div>
       <div style={{background:SURFACE,border:`1px solid ${AB}`,borderRadius:12,padding:"18px 20px",
         marginBottom:22,display:"flex",alignItems:"center",gap:16}}>
@@ -681,28 +760,81 @@ function StudentKiosk({ students, calendarEvents, currentUserProfile }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // ATTENDANCE (staff view)
 // ─────────────────────────────────────────────────────────────────────────────
-function Attendance({ students, role, calendarEvents, currentUserProfile }) {
+function Attendance({ students, setStudents, role, calendarEvents, currentUserProfile, gymAddress }) {
   const classes=calendarEvents.filter(e=>e.type==="class"||!e.type);
   const [sel,setSel]=useState(classes[0]||null);
   const [checked,setChecked]=useState({});
   const [saved,setSaved]=useState(false);
+  const [history,setHistory]=useState([]); // attendance records for selected class
+  const [loadingHistory,setLoadingHistory]=useState(false);
   const toggle=id=>setChecked(p=>({...p,[id]:!p[id]}));
   const count=Object.values(checked).filter(Boolean).length;
 
-  if(role==="student") return <StudentKiosk students={students} calendarEvents={calendarEvents} currentUserProfile={currentUserProfile}/>;
+  // Load attendance history whenever selected class changes
+  // Must be before any early returns (Rules of Hooks)
+  useEffect(()=>{
+    if(!sel||role==="student")return;
+    setLoadingHistory(true);
+    supabase.from("attendance")
+      .select("*, users(name,belt,stripes)")
+      .eq("class_id",sel.id)
+      .order("checked_in_at",{ascending:false})
+      .then(({data})=>{
+        setHistory(data||[]);
+        setLoadingHistory(false);
+      });
+  },[sel,saved,role]);
+
+  if(role==="student") return <StudentKiosk students={students} calendarEvents={calendarEvents} currentUserProfile={currentUserProfile} gymAddress={gymAddress}/>;
 
   const save=async()=>{
+    if(!sel){alert("Please select a class first.");return;}
     const ids=Object.entries(checked).filter(([,v])=>v).map(([k])=>k);
-    await Promise.all(ids.map(sid=>supabase.from("attendance").insert({
-      gym_id:GYM_ID,class_id:sel?.id,student_id:sid,verified_on_site:false
-    })));
-    setSaved(true);setTimeout(()=>setSaved(false),2500);
+    if(ids.length===0){alert("No students selected.");return;}
+
+    // Insert attendance records
+    for(const sid of ids){
+      await supabase.from("attendance").insert({
+        gym_id:GYM_ID,class_id:sel.id,student_id:sid,verified_on_site:false
+      });
+    }
+
+    // Increment attendance count and update local state immediately
+    for(const sid of ids){
+      await supabase.rpc("increment_attendance",{user_id:sid});
+    }
+
+    // Track classes taught for the instructor of the selected class
+    if(sel?.instructor_name||sel?.instructor){
+      const insName=sel.instructor_name||sel.instructor;
+      // Find instructor and increment their class count in Supabase
+      const {data:insRecord}=await supabase.from("users")
+        .select("id,attendance").eq("name",insName).eq("role","instructor").single();
+      if(insRecord){
+        await supabase.from("users")
+          .update({attendance:(insRecord.attendance||0)+1})
+          .eq("id",insRecord.id);
+      }
+    }
+
+    // Update local students state so UI reflects new count without refresh
+    setStudents(prev=>prev.map(s=>{
+      if(ids.includes(String(s.id))||ids.includes(s.id)){
+        const ne=s.belt==="white"?50:s.belt==="blue"?92:s.belt==="purple"?200:400;
+        return {...s,attendance:(s.attendance||0)+1,nextEligible:ne};
+      }
+      return s;
+    }));
+
+    setSaved(true);
+    setTimeout(()=>setSaved(false),2500);
   };
 
   return (
     <div style={{padding:"28px 32px"}}>
-      <PageHeader title="Attendance" sub="Roster Check-in" badge={`${count} checked in`}/>
-      <div style={{display:"grid",gridTemplateColumns:"230px 1fr",gap:18}}>
+      <PageHeader title="Attendance" sub="Roster Check-in" badge={`${count} selected`}/>
+      <div style={{display:"grid",gridTemplateColumns:"230px 1fr",gap:18,marginBottom:18}}>
+        {/* Class selector */}
         <Panel title="Classes" noPad>
           {classes.map(c=>(
             <button key={c.id} onClick={()=>{setSel(c);setChecked({});setSaved(false);}} style={{
@@ -716,7 +848,9 @@ function Attendance({ students, role, calendarEvents, currentUserProfile }) {
           ))}
           {classes.length===0&&<div style={{padding:16,fontFamily:mono,fontSize:10,color:TEXT3}}>No classes found.</div>}
         </Panel>
-        <Panel title={sel?`${sel.title} — ${sel.day} ${sel.time}`:"Select a class"} action={`${count}/${students.length} present`}>
+
+        {/* Check-in sheet */}
+        <Panel title={sel?`${sel.title} — ${sel.day} ${sel.time}`:"Select a class"} action={`${count}/${students.length} selected`}>
           <div style={{display:"flex",gap:9,marginBottom:13}}>
             <Btn small variant="ghost" onClick={()=>{const a={};students.forEach(s=>a[s.id]=true);setChecked(a);}}>Select All</Btn>
             <Btn small variant="ghost" onClick={()=>setChecked({})}>Clear</Btn>
@@ -733,15 +867,71 @@ function Attendance({ students, role, calendarEvents, currentUserProfile }) {
               </div>
               <Avatar name={s.name} size={32}/>
               <div style={{flex:1,fontFamily:cond,fontWeight:700,fontSize:15,color:TEXT1}}>{s.name}</div>
+              <div style={{fontFamily:mono,fontSize:9,color:TEXT3}}>{s.attendance||0} classes</div>
               <BeltBadge belt={s.belt} stripes={s.stripes}/>
             </div>
           ))}
           <div style={{marginTop:14,display:"flex",alignItems:"center",gap:12}}>
             <Btn onClick={save} disabled={!sel}>Save Attendance</Btn>
-            {saved&&<span style={{fontFamily:mono,fontSize:10,color:SUCCESS}}>✓ Saved</span>}
+            {saved&&<span style={{fontFamily:mono,fontSize:10,color:SUCCESS}}>✓ Saved successfully</span>}
           </div>
         </Panel>
       </div>
+
+      {/* Check-in history table */}
+      {sel&&(
+        <Panel title={`Check-in History — ${sel.title}`} action={`${history.length} total records`}>
+          {loadingHistory&&(
+            <div style={{fontFamily:mono,fontSize:10,color:TEXT3,padding:"8px 0"}}>Loading history…</div>
+          )}
+          {!loadingHistory&&history.length===0&&(
+            <div style={{fontFamily:mono,fontSize:10,color:TEXT3,padding:"8px 0"}}>No check-ins recorded for this class yet.</div>
+          )}
+          {!loadingHistory&&history.length>0&&(
+            <>
+              {/* Table header */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr auto auto",gap:"0 20px",
+                borderBottom:`1px solid ${BORDER}`,paddingBottom:8,marginBottom:4}}>
+                {["Student","Date & Time","Belt","Verified"].map(h=>(
+                  <div key={h} style={{fontFamily:mono,fontSize:8,color:TEXT3,
+                    letterSpacing:1,textTransform:"uppercase"}}>{h}</div>
+                ))}
+              </div>
+              {/* Table rows */}
+              {history.map((rec,i)=>{
+                const student=rec.users||{};
+                const dt=new Date(rec.checked_in_at);
+                const dateStr=dt.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+                const timeStr=dt.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+                return (
+                  <div key={i} style={{display:"grid",gridTemplateColumns:"1fr 1fr auto auto",
+                    gap:"0 20px",padding:"9px 0",borderBottom:`1px solid ${SURFACE2}`,
+                    alignItems:"center"}}>
+                    <div style={{fontFamily:cond,fontWeight:700,fontSize:14,color:TEXT1}}>
+                      {student.name||"Unknown"}
+                    </div>
+                    <div>
+                      <div style={{fontFamily:mono,fontSize:10,color:TEXT2}}>{dateStr}</div>
+                      <div style={{fontFamily:mono,fontSize:9,color:TEXT3}}>{timeStr}</div>
+                    </div>
+                    <div>
+                      {student.belt
+                        ?<BeltBadge belt={student.belt} stripes={student.stripes||0}/>
+                        :<span style={{fontFamily:mono,fontSize:9,color:TEXT3}}>—</span>
+                      }
+                    </div>
+                    <div>
+                      <Tag color={rec.verified_on_site?SUCCESS:TEXT3}>
+                        {rec.verified_on_site?"On-site":"Manual"}
+                      </Tag>
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          )}
+        </Panel>
+      )}
     </div>
   );
 }
@@ -752,6 +942,7 @@ function Attendance({ students, role, calendarEvents, currentUserProfile }) {
 function Calendar({ role, calendarEvents, setCalendarEvents }) {
   const [showForm,setShowForm]=useState(false);
   const [form,setForm]=useState({title:"",day:"Mon",time:"",type:"class",instructor:"",capacity:"10"});
+  const [editEvent,setEditEvent]=useState(null);
   const canEdit=role==="owner"||role==="instructor";
 
   const addEvent=async()=>{
@@ -765,9 +956,28 @@ function Calendar({ role, calendarEvents, setCalendarEvents }) {
     setShowForm(false);
   };
 
+  const saveEditEvent=async()=>{
+    if(!editEvent)return;
+    await supabase.from("classes").update({
+      title:editEvent.title,day:editEvent.day,time:editEvent.time,
+      type:editEvent.type,instructor_name:editEvent.instructor||editEvent.instructor_name,
+      capacity:parseInt(editEvent.capacity)||10
+    }).eq("id",editEvent.id);
+    setCalendarEvents(p=>p.map(e=>e.id===editEvent.id?{...e,...editEvent,
+      instructor:editEvent.instructor||editEvent.instructor_name}:e));
+    setEditEvent(null);
+  };
+
+  const deleteEvent=async(id)=>{
+    if(!window.confirm("Delete this class?"))return;
+    await supabase.from("classes").delete().eq("id",id);
+    setCalendarEvents(p=>p.filter(e=>e.id!==id));
+  };
+
   const typeColor={class:A,private:WARN};
 
   return (
+    <>
     <div style={{padding:"28px 32px"}}>
       <PageHeader title="Calendar" sub="Class Schedule">
         {canEdit&&<Btn onClick={()=>setShowForm(p=>!p)}>+ Schedule</Btn>}
@@ -812,6 +1022,16 @@ function Calendar({ role, calendarEvents, setCalendarEvents }) {
                     <div style={{fontFamily:mono,fontSize:8,color:typeColor[e.type]||A}}>{e.time}</div>
                     <div style={{fontFamily:cond,fontWeight:700,fontSize:12,color:TEXT1}}>{e.title}</div>
                     <div style={{fontFamily:mono,fontSize:7,color:TEXT3}}>{e.instructor_name||e.instructor||"—"}</div>
+                    {canEdit&&(
+                      <div style={{display:"flex",gap:4,marginTop:4}}>
+                        <button onClick={()=>setEditEvent({...e,instructor:e.instructor_name||e.instructor||""})}
+                          style={{fontFamily:mono,fontSize:7,color:A,background:"none",border:"none",
+                            cursor:"pointer",padding:"1px 4px",letterSpacing:1}}>EDIT</button>
+                        <button onClick={()=>deleteEvent(e.id)}
+                          style={{fontFamily:mono,fontSize:7,color:DANGER,background:"none",border:"none",
+                            cursor:"pointer",padding:"1px 4px",letterSpacing:1}}>DEL</button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -820,6 +1040,32 @@ function Calendar({ role, calendarEvents, setCalendarEvents }) {
         })}
       </div>
     </div>
+
+    {/* Edit Event Modal */}
+    {editEvent&&(
+      <Modal title="Edit Class" onClose={()=>setEditEvent(null)}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+          {[
+            {label:"Title",      el:<Input value={editEvent.title}      onChange={v=>setEditEvent(p=>({...p,title:v}))}      placeholder="Class name"/>},
+            {label:"Day",        el:<select value={editEvent.day}       onChange={e=>setEditEvent(p=>({...p,day:e.target.value}))} style={selStyle()}>{DAYS.map(d=><option key={d}>{d}</option>)}</select>},
+            {label:"Time",       el:<Input value={editEvent.time}       onChange={v=>setEditEvent(p=>({...p,time:v}))}       placeholder="18:00"/>},
+            {label:"Type",       el:<select value={editEvent.type||"class"} onChange={e=>setEditEvent(p=>({...p,type:e.target.value}))} style={selStyle()}><option value="class">Class</option><option value="private">Private</option></select>},
+            {label:"Instructor", el:<Input value={editEvent.instructor||""} onChange={v=>setEditEvent(p=>({...p,instructor:v}))} placeholder="Instructor name"/>},
+            {label:"Capacity",   el:<input type="number" value={editEvent.capacity||10} onChange={e=>setEditEvent(p=>({...p,capacity:e.target.value}))} style={{...selStyle(),width:"100%"}}/>},
+          ].map(({label,el})=>(
+            <div key={label}>
+              <div style={{fontFamily:mono,fontSize:8,color:TEXT3,letterSpacing:1,marginBottom:4,textTransform:"uppercase"}}>{label}</div>
+              {el}
+            </div>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <Btn variant="neutral" onClick={()=>setEditEvent(null)}>Cancel</Btn>
+          <Btn onClick={saveEditEvent}>Save Changes</Btn>
+        </div>
+      </Modal>
+    )}
+    </>
   );
 }
 
@@ -961,8 +1207,19 @@ function Videos({ role, videos, setVideos }) {
     let storagePath=null;
     if(selectedFile){
       const fileName=`${Date.now()}-${selectedFile.name}`;
-      const { data:up, error:ue } = await supabase.storage.from("videos").upload(fileName,selectedFile,{cacheControl:"3600",upsert:false});
-      if(ue){alert("Upload failed: "+ue.message);setUploading(false);return;}
+      // Upload in chunks for large files
+      const { data:up, error:ue } = await supabase.storage
+        .from("videos")
+        .upload(fileName, selectedFile, {
+          cacheControl: "3600",
+          upsert: false,
+        });
+      if(ue){
+        console.error("Upload error:", ue);
+        alert("Upload failed: "+ue.message+" — Check your Supabase storage bucket size limit in Storage settings.");
+        setUploading(false);
+        return;
+      }
       storagePath=up.path;
     }
     const { data } = await supabase.from("videos").insert({
@@ -1002,7 +1259,7 @@ function Videos({ role, videos, setVideos }) {
               ? <div style={{fontFamily:cond,fontWeight:700,fontSize:16,color:A}}>{selectedFile.name}</div>
               : <>
                   <div style={{fontFamily:cond,fontWeight:700,fontSize:16,color:TEXT2,marginBottom:4}}>Click to browse or drop video file</div>
-                  <div style={{fontFamily:mono,fontSize:9,color:TEXT3}}>MP4, MOV, AVI up to 2GB</div>
+                  <div style={{fontFamily:mono,fontSize:9,color:TEXT3}}>MP4, MOV, AVI — no size limit (large files may take several minutes)</div>
                 </>
             }
           </div>
@@ -1647,8 +1904,10 @@ function Billing({ students, role }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // SETTINGS
 // ─────────────────────────────────────────────────────────────────────────────
-function Settings({ promoReqs, setPromoReqs, prices, setPrices, students, setStudents, gymLogo, setGymLogo }) {
+function Settings({ promoReqs, setPromoReqs, prices, setPrices, students, setStudents, gymLogo, setGymLogo, gymName, setGymName, gymAddress, setGymAddress }) {
   const [tab,setTab]=useState("pricing");
+  const [nameEdit,setNameEdit]=useState(gymName);
+  const [addrEdit,setAddrEdit]=useState(gymAddress);
   const logoRef=useRef();
 
   const handleLogo=e=>{
@@ -1663,7 +1922,7 @@ function Settings({ promoReqs, setPromoReqs, prices, setPrices, students, setStu
     <div style={{padding:"28px 32px"}}>
       <PageHeader title="Settings" sub="Gym Configuration"/>
       <div style={{display:"flex",gap:4,marginBottom:24,borderBottom:`1px solid ${BORDER}`}}>
-        {[["pricing","Pricing & Discounts"],["promo","Promotion Requirements"],["logo","Gym Logo"]].map(([t,l])=>(
+        {[["pricing","Pricing & Discounts"],["promo","Promotion Requirements"],["logo","Gym Logo"],["gym","Gym Details"]].map(([t,l])=>(
           <button key={t} onClick={()=>setTab(t)} style={{padding:"9px 18px",border:"none",cursor:"pointer",fontFamily:mono,fontSize:10,
             letterSpacing:1,textTransform:"uppercase",fontWeight:tab===t?700:400,background:"transparent",
             borderBottom:`3px solid ${tab===t?A:"transparent"}`,color:tab===t?A:TEXT2,marginBottom:-1}}>{l}</button>
@@ -1740,6 +1999,53 @@ function Settings({ promoReqs, setPromoReqs, prices, setPrices, students, setStu
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {tab==="gym"&&(
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
+          {/* Gym Name */}
+          <Panel title="Gym Name">
+            <div style={{fontFamily:mono,fontSize:9,color:TEXT3,marginBottom:12}}>
+              This name appears in the sidebar and on all communications.
+            </div>
+            <div style={{marginBottom:12}}>
+              <div style={{fontFamily:mono,fontSize:8,color:TEXT3,letterSpacing:1,marginBottom:4}}>GYM NAME</div>
+              <Input value={nameEdit} onChange={setNameEdit} placeholder="Your gym name"/>
+            </div>
+            <Btn small onClick={()=>setGymName(nameEdit)}>Save Name</Btn>
+          </Panel>
+
+          {/* Location Settings */}
+          <Panel title="Location & Geo-lock">
+            <div style={{fontFamily:mono,fontSize:9,color:TEXT3,marginBottom:12}}>
+              Set your gym's coordinates and allowed check-in radius. Students must be within this distance to check in.
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+              {[
+                {label:"Latitude",  field:"lat",  placeholder:"37.7749"},
+                {label:"Longitude", field:"lng",  placeholder:"-122.4194"},
+                {label:"Radius (m)",field:"radius",placeholder:"150"},
+              ].map(({label,field,placeholder})=>(
+                <div key={field}>
+                  <div style={{fontFamily:mono,fontSize:8,color:TEXT3,letterSpacing:1,marginBottom:4,textTransform:"uppercase"}}>{label}</div>
+                  <input type="number" value={addrEdit[field]||""} placeholder={placeholder}
+                    onChange={e=>setAddrEdit(p=>({...p,[field]:parseFloat(e.target.value)||0}))}
+                    style={{...selStyle(),width:"100%"}}/>
+                </div>
+              ))}
+              <div style={{gridColumn:"span 2"}}>
+                <div style={{fontFamily:mono,fontSize:8,color:TEXT3,letterSpacing:1,marginBottom:4,textTransform:"uppercase"}}>Street Address (display only)</div>
+                <Input value={addrEdit.label||""} onChange={v=>setAddrEdit(p=>({...p,label:v}))} placeholder="123 Main St, City, State"/>
+              </div>
+            </div>
+            <div style={{background:`${A}0d`,border:`1px solid ${AB}`,borderRadius:6,padding:"10px 12px",marginBottom:12}}>
+              <div style={{fontFamily:mono,fontSize:9,color:TEXT2}}>
+                To find your coordinates: go to <strong>maps.google.com</strong>, right-click your gym location, and copy the lat/lng numbers shown.
+              </div>
+            </div>
+            <Btn small onClick={()=>setGymAddress(addrEdit)}>Save Location</Btn>
+          </Panel>
         </div>
       )}
 
@@ -1888,6 +2194,8 @@ export default function App() {
   const [promoReqs,setPromoReqs]     = useState(INIT_PROMO_REQS);
   const [prices,setPrices]           = useState(INIT_PRICES);
   const [gymLogo,setGymLogo]         = useState(null);
+  const [gymName,setGymName]         = useState("Ribeiro BJJ Academy");
+  const [gymAddress,setGymAddress]   = useState({lat:37.7749,lng:-122.4194,radius:150,label:"123 Main St, San Francisco, CA"});
   const [calendarEvents,setCalendarEvents] = useState([]);
   const [documents,setDocuments]     = useState([]);
   const [videos,setVideos]           = useState([]);
@@ -1901,19 +2209,11 @@ export default function App() {
       if(!user)return;
       const clerkId=user.id;
       const email=user.primaryEmailAddress?.emailAddress||"";
-      const firstName=user.firstName||"";
-      const lastName=user.lastName||"";
-      const fullName=`${firstName} ${lastName}`.trim();
-      const name=fullName||user.username||email;
+      const name=user.fullName||email;
       const { data:existing } = await supabase
         .from("users").select("*").eq("clerk_id",clerkId).single();
       if(existing){
-        // Update name if it changed in Clerk
-        if(name && name !== existing.email && existing.name === existing.email){
-          await supabase.from("users").update({name}).eq("clerk_id",clerkId);
-        }
         setCurrentUserProfile({...existing,
-          name: (name && name !== email) ? name : existing.name,
           nextEligible:existing.belt==="white"?50:existing.belt==="blue"?92:existing.belt==="purple"?200:400,
           billing:existing.billing_status
         });
@@ -1952,9 +2252,18 @@ export default function App() {
         parentId:s.parent_id,billing:s.billing_status
       })));
 
-      if(insData) setInstructors(insData.map(i=>({...i,
-        progress:i.progress||0,classes:i.attendance||0,cert:i.cert||"Level 1"
-      })));
+      if(insData){
+        // Count classes taught per instructor from classes table
+        const insWithClasses = await Promise.all(insData.map(async ins=>{
+          const {count} = await supabase.from("classes")
+            .select("*",{count:"exact",head:true})
+            .eq("instructor_name",ins.name)
+            .eq("gym_id",GYM_ID);
+          return {...ins,progress:ins.progress||0,
+            classes:count||ins.attendance||0,cert:ins.cert||"Level 1"};
+        }));
+        setInstructors(insWithClasses);
+      }
 
       if(classData) setCalendarEvents(classData.map(c=>({...c,instructor:c.instructor_name||""})));
 
@@ -1993,12 +2302,12 @@ export default function App() {
 
   const sharedProps={students,setStudents,instructors,setInstructors,
     curriculum,setCurriculum,promoReqs,setPromoReqs,prices,setPrices,role,
-    currentUserProfile};
+    currentUserProfile,gymName,setGymName,gymAddress,setGymAddress};
 
   const VIEW = {
-    dashboard:       <Dashboard      {...sharedProps} calendarEvents={calendarEvents}/>,
+    dashboard:       <Dashboard      {...sharedProps} calendarEvents={calendarEvents} setStudents={setStudents}/>,
     students:        <Students       {...sharedProps}/>,
-    attendance:      <Attendance     {...sharedProps} calendarEvents={calendarEvents} currentUserProfile={currentUserProfile}/>,
+    attendance:      <Attendance     {...sharedProps} calendarEvents={calendarEvents} currentUserProfile={currentUserProfile} gymAddress={gymAddress} setStudents={setStudents}/>,
     calendar:        <Calendar       role={role} calendarEvents={calendarEvents} setCalendarEvents={setCalendarEvents}/>,
     curriculum:      <Curriculum     {...sharedProps}/>,
     videos:          <Videos         role={role} videos={videos} setVideos={setVideos}/>,
@@ -2007,7 +2316,7 @@ export default function App() {
     messaging:       <Messaging      students={students}/>,
     reports:         <Reports        students={students}/>,
     billing:         <Billing        students={currentUserProfile?[currentUserProfile,...students.filter(s=>s.id!==currentUserProfile.id)]:students} role={role}/>,
-    settings:        <Settings       {...sharedProps} gymLogo={gymLogo} setGymLogo={setGymLogo}/>,
+    settings:        <Settings       {...sharedProps} gymLogo={gymLogo} setGymLogo={setGymLogo} gymAddress={gymAddress} setGymAddress={setGymAddress}/>,
     "my-progress":   <MyProgress     students={currentUserProfile?[currentUserProfile,...students.filter(s=>s.id!==currentUserProfile.id)]:students} promoReqs={promoReqs} curriculum={curriculum}/>,
     "parent-portal": <ParentPortal   students={students} curriculum={curriculum}/>,
   };
@@ -2026,7 +2335,7 @@ export default function App() {
         select{appearance:auto}
       `}</style>
       <div style={{display:"flex",minHeight:"100vh",background:"#f0f4f8"}}>
-        <Sidebar active={active} setActive={setActive} role={role} setRole={setRole} gymLogo={gymLogo} clerkRole={clerkRole}/>
+        <Sidebar active={active} setActive={setActive} role={role} setRole={setRole} gymLogo={gymLogo} clerkRole={clerkRole} gymName={gymName}/>
         <main style={{flex:1,overflowY:"auto",maxHeight:"100vh",background:"#f0f4f8"}}>
           {VIEW[active]??<div style={{padding:40,fontFamily:"'DM Mono',monospace",color:"#8aaac8"}}>View not found.</div>}
         </main>
@@ -2042,10 +2351,7 @@ export default function App() {
           <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:40,color:"#0f2540"}}>
             <span style={{color:"#2563eb"}}>BJJ</span>Groundwork
           </div>
-          <SignIn routing="hash" appearance={{elements:{
-            card:{boxShadow:"0 4px 24px rgba(0,0,0,.08)",borderRadius:12},
-            headerTitle:{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900},
-          }}}/>
+          <SignIn routing="hash"/>
         </div>
       </SignedOut>
       <SignedIn>
